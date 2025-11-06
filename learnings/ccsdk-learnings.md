@@ -492,4 +492,266 @@ Do not create in 'tmp' directory or system directories.</Important>`;
 
 ---
 
-*Last Updated: 2025-11-05*
+## Next.js API Route Environment Issue
+
+### Problem
+
+When integrating the Claude Agent SDK into a Next.js API route (`/app/api/chat/route.ts`), the endpoint returned an error:
+
+```json
+{
+  "type": "error",
+  "error": "Failed to spawn Claude Code process: spawn node ENOENT"
+}
+```
+
+**Context:**
+- Route configured with `export const runtime = "nodejs"`
+- Same config worked perfectly in CLI scripts (`agent.ts`)
+- API route could start but SDK failed to spawn subprocess
+
+### Root Cause
+
+Next.js API routes run in a **different execution context** than CLI scripts, with a more restricted environment. The SDK's subprocess spawn mechanism couldn't find the `node` binary or other required executables because:
+
+1. **Environment inheritance**: API routes don't automatically inherit the full shell environment
+2. **PATH availability**: The `PATH` variable may not be fully populated in serverless-like contexts
+3. **Process spawning**: The SDK spawns the Claude Code CLI as a subprocess, which requires access to system binaries
+
+This is related to [GitHub Issue #4383](https://github.com/anthropics/claude-code/issues/4383) - SDK spawn issues in containerized/restricted environments.
+
+### What We Tried (Didn't Work)
+
+❌ **Manually setting PATH with specific directories**
+```typescript
+env: {
+  ...process.env,
+  PATH: `/Users/gang/.local/bin:${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}`,
+}
+```
+
+❌ **Adding explicit node path**
+```typescript
+env: {
+  ...process.env,
+  NODE: "/usr/local/bin/node",
+}
+```
+
+❌ **Specifying Claude Code executable path**
+```typescript
+pathToClaudeCodeExecutable: "/Users/gang/.local/bin/claude",
+// Also tried with resolved symlink path
+pathToClaudeCodeExecutable: "/Users/gang/.local/share/claude/versions/2.0.34",
+```
+
+❌ **Setting executable option**
+```typescript
+executable: "node",
+```
+
+### Solution
+
+**Simply pass the entire `process.env` to the SDK options:**
+
+```typescript
+// app/api/chat/config.ts
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
+
+export const agentOptions: Options = {
+  maxTurns: 50,
+  cwd: "/path/to/workspace",
+  permissionMode: "default",
+  model: "haiku",
+  allowedTools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
+  systemPrompt: SYSTEM_PROMPT,
+  settingSources: ["local"],
+
+  // ✅ The fix: Pass full environment
+  env: process.env,
+};
+```
+
+**Why this works:**
+- Ensures SDK subprocess inherits ALL environment variables
+- Includes proper PATH, HOME, USER, and other system variables
+- Matches the environment that CLI scripts have access to
+- No need to manually specify individual paths
+
+### Testing & Validation
+
+Created a test script to validate the NDJSON streaming endpoint:
+
+```typescript
+// test-chat-stream.ts
+async function testChatStream() {
+  const response = await fetch('http://localhost:3000/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: 'List files in current directory' }]
+    })
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.trim()) {
+        const message = JSON.parse(line);
+        console.log('Message:', message.type);
+      }
+    }
+  }
+}
+```
+
+**Test Results (✅ Success):**
+```
+✓ Response status: 200
+✓ Content-Type: application/x-ndjson
+
+[Message 1] Type: system (init with session ID)
+[Message 2] Type: assistant (tool use - Bash command)
+[Message 3] Type: user (tool result)
+[Message 4] Type: assistant (formatted response)
+[Message 5] Type: result (success with cost/tokens)
+
+Duration: 4789ms
+Cost: $0.0012
+Tokens: 9 input / 102 output
+```
+
+### Message Flow
+
+The NDJSON stream returns these message types in sequence:
+
+1. **`system` (init)**: Session ID, model, available tools
+2. **`assistant`**: Agent's response with tool uses or text
+3. **`user`**: Tool results fed back as user messages (internal)
+4. **`assistant`**: Final formatted response
+5. **`result`**: Completion status with usage stats
+
+### Key Takeaways
+
+✅ **API routes need explicit environment passing** - Don't assume `process.env` is automatically available to spawned subprocesses
+
+✅ **Keep config simple** - Passing full `process.env` is more reliable than manually constructing PATH
+
+✅ **Test with streaming script** - Validate NDJSON parsing before building frontend
+
+✅ **Session management works automatically** - SDK maintains session context across messages with `session_id: ""`
+
+### Frontend Integration Notes
+
+With the backend working, the frontend can:
+- Send only the new user message (not full history)
+- Parse NDJSON line-by-line with buffer accumulation
+- Display messages in real-time as they stream
+- Detect completion with `message.type === 'result'`
+
+**Example NDJSON parsing:**
+```typescript
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = '';
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split('\n');
+  buffer = lines.pop() || ''; // Keep incomplete line
+
+  for (const line of lines) {
+    if (line.trim()) {
+      const message = JSON.parse(line);
+      // Handle message
+      if (message.type === 'result') break;
+    }
+  }
+}
+```
+
+### Comparison with CLI Scripts
+
+| Aspect | CLI Scripts | Next.js API Routes |
+|--------|-------------|-------------------|
+| **Runtime** | Node.js via `npx tsx` | Node.js (Next.js server) |
+| **Environment** | Full shell environment | Restricted serverless context |
+| **Config needed** | Standard options | Must include `env: process.env` |
+| **Works with** | `settingSources`, basic options | Same + explicit env passing |
+
+### Related Issues
+
+- [GitHub Issue #4383](https://github.com/anthropics/claude-code/issues/4383) - SDK spawn ENOENT in Docker/restricted environments
+- Similar issues occur in containerized environments, CI/CD pipelines, and serverless functions
+
+### Configuration Reference
+
+**Working Next.js API Route Setup:**
+
+```typescript
+// app/api/chat/route.ts
+export const runtime = "nodejs";  // Required
+export const dynamic = "force-dynamic";
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      async function* generateMessages() {
+        for (const msg of body.messages) {
+          if (msg.role === "user") {
+            yield {
+              type: "user" as const,
+              session_id: "",  // Empty = current session
+              message: {
+                role: "user" as const,
+                content: msg.content,
+              },
+              parent_tool_use_id: null,
+            };
+          }
+        }
+      }
+
+      for await (const message of query({
+        prompt: generateMessages(),
+        options: agentOptions,  // Includes env: process.env
+      })) {
+        const chunk = JSON.stringify(message) + "\n";
+        controller.enqueue(encoder.encode(chunk));
+
+        if (message.type === "result") break;
+      }
+
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+}
+```
+
+---
+
+*Last Updated: 2025-11-06*

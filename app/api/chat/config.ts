@@ -23,7 +23,7 @@ export const agentOptions: Options = {
   maxTurns: 50,
 
   // Working directory for agent operations
-  cwd: "/Users/gang/git-projects/claude-agents/app/api/chat/workspace",
+  cwd: "/Users/gang/git-projects/claude-agents-ts/app/api/chat/workspace",
 
   // Permission mode - bypass for non-interactive usage
   permissionMode: "default",
@@ -39,6 +39,9 @@ export const agentOptions: Options = {
 
   // Load filesystem settings from project
   settingSources: ["local"],
+
+  // Pass environment explicitly for Next.js API routes (fixes spawn ENOENT)
+  env: process.env,
 
   // Optional: Disable specific tools
   // disallowedTools: [],
