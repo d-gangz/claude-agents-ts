@@ -15,7 +15,7 @@ import { openai } from "@ai-sdk/openai";
  * @param input - The name to greet
  * @returns The final processed and refined greeting
  *
- * Result: It works and it is finally tracing AI SDK stuff properly in an experiment. So I can finally use Vercel AI SDK with Braintrust
+ * Result: It works and it is finally tracing AI SDK stuff properly in an experiment. So I can finally use Vercel AI SDK with Braintrust. And you can run this script directly using `npx tsx ai-sdk-bt.ts`
  */
 
 // Load environment variables from .env.local. You need to do this else it will fail.
