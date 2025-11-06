@@ -194,13 +194,21 @@ The Claude Agent SDK is a **wrapper around the Claude Code CLI**, which spawns N
 
 If Bun support is critical, consider using the base `@anthropic-ai/sdk` instead of the Agent SDK, though you'll lose the agent capabilities (tools, streaming input, session management, etc.).
 
-## How Session Continuity Works in Streaming Mode
+## How Session Continuity Works
 
-### The Generator Pattern Explained
+### Overview: Three Ways to Achieve Session Continuity
 
-When using streaming input mode with async generators, many developers wonder: **"How does the SDK know messages belong to the same session?"**
+The Claude Agent SDK provides **three mechanisms** for maintaining conversation context:
 
-#### Key Mechanism: `session_id: ""`
+1. **`session_id: ""`** - Automatic within single `query()` call (CLI pattern)
+2. **`continue: true`** - Resume most recent session globally (single-user only)
+3. **`resume: sessionId`** - Resume specific session by ID (multi-user safe)
+
+### 1. Streaming Mode Pattern: `session_id: ""`
+
+**Use case:** CLI scripts with long-lived generator (single `query()` call for entire conversation)
+
+#### How It Works
 
 In the message yielded by the generator:
 
@@ -216,9 +224,9 @@ yield {
 };
 ```
 
-The **empty `session_id`** tells the SDK to use the current active session. Here's the flow:
+The **empty `session_id`** tells the SDK to use the current active session **within this `query()` call**.
 
-#### Session Lifecycle:
+#### Session Lifecycle (Single Query Call):
 
 1. **`query()` starts** → SDK creates a new session with unique ID (e.g., "ABC123")
 2. **Generator yields with `session_id: ""`** → SDK interprets as "use ABC123"
@@ -241,6 +249,8 @@ SDK processes message...
             ↓ (resume generator)
 ...continues indefinitely
 ```
+
+**Key limitation:** `session_id: ""` only works within a **single `query()` call**. Once `query()` ends, the session context is lost unless you use `continue` or `resume`.
 
 #### Why Generators Don't Close After Yielding
 
@@ -286,51 +296,140 @@ for await (const message of query({
 }
 ```
 
-#### Specifying Different Sessions
+### 2. Global Resume Pattern: `continue: true`
 
-If you wanted to explicitly use a different session (uncommon):
+**Use case:** Single-user applications where you want to automatically resume the most recent conversation
+
+**⚠️ Warning:** NOT suitable for multi-user applications!
+
+#### How It Works
 
 ```typescript
-yield {
-  session_id: "specific-session-id-here",  // Uses that specific session
-  // ...
-}
+// Config with continue: true
+export const agentOptions: Options = {
+  // ... other options
+  continue: true,  // Resume most recent session
+};
+
+// Each query() call automatically resumes the last session
+for await (const message of query({
+  prompt: generateMessages(),
+  options: agentOptions,
+})) { ... }
 ```
 
-But using `""` (empty string) is the standard pattern that enables automatic session continuity.
+#### Limitations
 
-#### Benefits of This Pattern
+❌ **Global scope** - Always resumes THE most recent session on the system
+❌ **Multi-user conflicts** - User B's request resumes User A's session
+❌ **Page refresh issues** - UI clears but backend remembers old context
 
-✅ **Automatic history management** - SDK tracks all conversation context
-✅ **Multi-turn conversations** - Natural back-and-forth without manual tracking
-✅ **Persistent state** - Session stays alive across all interactions
-✅ **No manual context passing** - Don't need to manually maintain message arrays
+**Example of multi-user conflict:**
+```
+1. User A sends "My name is Alice" → Creates session ABC
+2. User B sends "My name is Bob" → Creates session XYZ (most recent)
+3. User A sends "What's my name?" → Resumes XYZ → Agent says "Bob" ❌
+```
 
-#### Comparison with Raw Anthropic API
+### 3. Specific Resume Pattern: `resume: sessionId`
 
-**Manual history (Raw API):**
+**Use case:** Multi-user applications with proper session isolation
+
+**✅ Recommended** for production deployments!
+
+#### How It Works
+
 ```typescript
-const messages = [];  // You maintain this
-messages.push({ role: "user", content: "Hello" });
-const response = await anthropic.messages.create({ messages });
-messages.push({ role: "assistant", content: response.content });
-messages.push({ role: "user", content: "Tell me more" });
-// Have to manually track everything
+// Backend extracts sessionId from request
+const { messages, sessionId } = await req.json();
+
+// Use resume with specific session ID
+const options = {
+  ...agentOptions,
+  ...(sessionId && { resume: sessionId }),  // Resume this specific session
+};
+
+for await (const message of query({
+  prompt: generateMessages(),
+  options,
+})) { ... }
 ```
 
-**Automatic history (Agent SDK):**
+#### Benefits
+
+✅ **Per-user isolation** - Each user has their own session ID
+✅ **Multi-user safe** - No cross-user session interference
+✅ **Controlled state** - Frontend decides when to start fresh vs continue
+✅ **Clean page refresh** - No sessionId in state = new conversation
+
+**Example of multi-user safety:**
+```
+1. User A sends "My name is Alice" → Session ABC created, frontend stores ABC
+2. User B sends "My name is Bob" → Session XYZ created, frontend stores XYZ
+3. User A sends "What's my name?" → Frontend sends ABC → Agent says "Alice" ✅
+4. User B sends "What's my name?" → Frontend sends XYZ → Agent says "Bob" ✅
+```
+
+### Comparison: Which Approach to Use?
+
+| Feature | `session_id: ""` | `continue: true` | `resume: sessionId` |
+|---------|------------------|------------------|---------------------|
+| **Scope** | Within single `query()` | Global most recent | Specific session |
+| **Use case** | CLI scripts | Single-user apps | Multi-user apps |
+| **Session tracking** | Automatic | Automatic | Manual (frontend) |
+| **Multi-user safe?** | N/A | ❌ No | ✅ Yes |
+| **Page refresh behavior** | N/A | ❌ Remembers old | ✅ Fresh start |
+| **Implementation complexity** | Simple | Simple | Moderate |
+| **Production ready?** | For CLI only | Single-user only | ✅ Yes |
+
+### Decision Guide
+
+**Choose `session_id: ""` when:**
+- Building CLI tools with interactive terminal input
+- Single `query()` call handles entire conversation
+- Example: `app/api/chat/agent.ts`
+
+**Choose `continue: true` when:**
+- Single-user application (personal tools, desktop apps)
+- You want automatic session resume without tracking IDs
+- No multiple concurrent users
+
+**Choose `resume: sessionId` when:**
+- ✅ Building web applications with multiple users
+- ✅ Need explicit control over session lifecycle
+- ✅ Want page refresh to start fresh conversations
+- ✅ Production deployment
+
+### Quick Implementation Reference
+
+**CLI Pattern (session_id: ""):**
 ```typescript
 async function* generateMessages() {
   while (true) {
-    yield { session_id: "", message: getUserInput() };
-    // SDK handles all history automatically
+    const input = await readline.question("You: ");
+    yield { session_id: "", message: { role: "user", content: input } };
   }
 }
+
+for await (const msg of query({ prompt: generateMessages(), options })) {
+  console.log(msg);
+}
+```
+
+**API Pattern (resume: sessionId):**
+```typescript
+// Frontend
+const [sessionId, setSessionId] = useState<string | null>(null);
+if (msg.type === "system" && !sessionId) setSessionId(msg.session_id);
+
+// Backend
+const options = { ...agentOptions, ...(sessionId && { resume: sessionId }) };
 ```
 
 ### Related Documentation
 - See `SDKUserMessage` type in reference.md (line 412-424)
 - See "Streaming Input Mode" guide in reference.md (line 1801-2095)
+- See "Session Continuity in API Routes vs CLI" section below for detailed multi-user implementation
 
 ## Working Directory (`cwd`) Configuration
 
@@ -799,73 +898,112 @@ export async function POST(req: NextRequest) {
 
 Each HTTP request triggers a new `query()` call, which by default creates a **brand new session**, losing all previous context.
 
-### Solution
+### Solution: Use `resume` with Session ID Management
 
-Use the `continue: true` option to resume the most recent session:
+**❌ Wrong Approach: `continue: true`**
 
+The `continue: true` option resumes **the most recent session globally**, not per-user:
+- User A sends message → session "ABC" created
+- User B sends message → session "XYZ" created (most recent)
+- User A sends another → resumes "XYZ" (User B's session!) ❌
+- Page refresh still remembers old conversation (UI/backend mismatch) ❌
+
+**✅ Correct Approach: `resume` with explicit session ID**
+
+The `resume` option resumes a **specific session by ID**, perfect for multi-user scenarios:
+
+**1. Extract session ID from first message:**
 ```typescript
-// app/api/chat/config.ts
-export const agentOptions: Options = {
-  maxTurns: 50,
-  cwd: "/path/to/workspace",
-  model: "haiku",
-  allowedTools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
-  systemPrompt: SYSTEM_PROMPT,
-  settingSources: ["local"],
-  env: process.env,
+// Frontend: components/chat-interface.tsx
+const [sessionId, setSessionId] = useState<string | null>(null);
 
-  // ✅ Continue the most recent conversation
-  continue: true,
+// When parsing NDJSON stream
+if (message.type === "system" && message.subtype === "init" && !sessionId) {
+  setSessionId(message.session_id);  // Store in state
+}
+```
+
+**2. Include session ID in subsequent requests:**
+```typescript
+// Frontend: send sessionId if available
+const requestBody = {
+  messages: [{ role: "user", content: userMessage }],
+  ...(sessionId && { sessionId }),  // Include if exists
 };
 ```
 
+**3. Use resume in backend:**
+```typescript
+// Backend: app/api/chat/route.ts
+const { messages, sessionId } = await req.json();
+
+const options = {
+  ...agentOptions,
+  ...(sessionId && { resume: sessionId }),  // Resume specific session
+};
+
+for await (const message of query({
+  prompt: generateMessages(),
+  options,
+})) { ... }
+```
+
 **How it works:**
-1. First request: SDK creates new session (e.g., "ABC123")
-2. Second request: `continue: true` tells SDK to look up "ABC123" and resume
-3. Third request: SDK continues from previous state with full history
+1. First request (no sessionId): SDK creates new session "ABC123"
+2. Frontend extracts and stores "ABC123" in React state
+3. Second request: Frontend sends `sessionId: "ABC123"`
+4. Backend uses `resume: "ABC123"` to continue that specific session
+5. Page refresh: State clears → new session created (fresh start)
 
 ### Why This Pattern Differs
 
-| Aspect | CLI Script | API Route |
-|--------|-----------|-----------|
-| **Query calls** | Single `query()` for entire conversation | New `query()` per HTTP request |
-| **Session creation** | One session, maintained automatically | New session per request (without `continue`) |
-| **Generator lifetime** | Lives for entire conversation | Created/destroyed per request |
-| **Context preservation** | Automatic via `session_id: ""` | Requires `continue: true` |
+| Aspect | CLI Script | API Route with `continue: true` | API Route with `resume` |
+|--------|-----------|--------------------------------|------------------------|
+| **Query calls** | Single `query()` for entire conversation | New `query()` per HTTP request | New `query()` per HTTP request |
+| **Session scope** | One session, local to process | Global "most recent" session | Specific session by ID |
+| **Multi-user safety** | N/A (single user CLI) | ❌ Users interfere | ✅ Isolated per user |
+| **Page refresh behavior** | N/A | ❌ Resumes old session | ✅ Starts fresh |
+| **Context preservation** | Automatic via `session_id: ""` | Automatic but global | Manual per-user tracking |
 
 ### Key Takeaway
 
-**Streaming input mode** (CLI) vs **HTTP request-response** (API routes) require different session management approaches:
+**For production multi-user apps, use `resume` with explicit session IDs:**
 
-- **CLI**: Single `query()` call + async generator = automatic session continuity
-- **API**: Multiple `query()` calls + `continue: true` = manual session continuity
+- ❌ **`continue: true`** - Global, single-user only, page refresh issues
+- ✅ **`resume: sessionId`** - Per-user, multi-user safe, clean state management
 
-Without `continue: true`, your API route creates a stateless agent that forgets everything between requests.
+**Implementation pattern:**
+1. Frontend stores session ID in React state
+2. Backend uses `resume` when session ID provided
+3. Page refresh clears state → new session (UI matches backend)
 
 ### Validation
 
-After adding `continue: true`, test conversation memory:
+Test the session management in the browser:
 
-```bash
-# First message
-curl -X POST http://localhost:3000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"My name is Gang"}]}'
+1. **Test session continuity:**
+   - Navigate to http://localhost:3000/chat
+   - Send: "My name is Gang"
+   - Send: "What is my name?"
+   - ✅ Should remember your name
 
-# Second message (should remember the name)
-curl -X POST http://localhost:3000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"What is my name?"}]}'
-```
+2. **Test page refresh (fresh session):**
+   - Refresh the page
+   - Send: "What is my name?"
+   - ✅ Should say it doesn't know (new session)
 
-The agent should now respond with your name, proving session continuity works.
+3. **Test multi-user isolation** (open two browser windows):
+   - Window A: "My name is Alice"
+   - Window B: "My name is Bob"
+   - Window A: "What is my name?"
+   - ✅ Should say "Alice" (not "Bob")
 
 ### Related Configuration
 
 For reference, here's the complete working configuration:
 
+**Backend config (app/api/chat/config.ts):**
 ```typescript
-// app/api/chat/config.ts
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 
 const SYSTEM_PROMPT = `You are a helpful AI assistant.`;
@@ -878,29 +1016,63 @@ export const agentOptions: Options = {
   allowedTools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
   systemPrompt: SYSTEM_PROMPT,
   settingSources: ["local"],
-  env: process.env,        // Required for Next.js API routes
-  continue: true,          // Required for session continuity across HTTP requests
+  env: process.env,  // Required for Next.js API routes
+  // Note: Do NOT use continue: true for multi-user apps
 };
 ```
 
-### Frontend Implications
-
-With `continue: true` enabled:
-- Frontend only sends the **latest user message** (not full history)
-- SDK automatically loads and continues the conversation context
-- Each request builds on previous conversation state
-- Session persists until explicitly cleared or expired
-
-**Frontend example:**
+**Backend API route (app/api/chat/route.ts):**
 ```typescript
-// Only send the new message
-const response = await fetch("/api/chat", {
-  method: "POST",
-  body: JSON.stringify({
-    messages: [{ role: "user", content: userInput }]  // Just the latest
-  })
-});
+const { messages, sessionId } = await req.json();
+
+const options = {
+  ...agentOptions,
+  ...(sessionId && { resume: sessionId }),  // Resume specific session
+};
 ```
+
+**Frontend (components/chat-interface.tsx):**
+```typescript
+const [sessionId, setSessionId] = useState<string | null>(null);
+
+// Extract from first system message
+if (message.type === "system" && message.subtype === "init" && !sessionId) {
+  setSessionId(message.session_id);
+}
+
+// Send with sessionId
+const requestBody = {
+  messages: [{ role: "user", content: userInput }],
+  ...(sessionId && { sessionId }),
+};
+```
+
+### Production Considerations
+
+For production deployment with persistent sessions across page reloads:
+
+1. **Store session ID in database** instead of React state:
+   ```typescript
+   // After extracting session_id
+   await db.saveSession(userId, sessionId);
+   ```
+
+2. **Load session ID on page load:**
+   ```typescript
+   useEffect(() => {
+     const loadSession = async () => {
+       const savedSessionId = await db.getSession(userId);
+       setSessionId(savedSessionId);
+     };
+     loadSession();
+   }, [userId]);
+   ```
+
+3. **Implement session management:**
+   - Store multiple sessions per user (conversation history)
+   - Allow users to create new conversations
+   - Implement session cleanup/expiration
+   - Add "Clear conversation" button to create fresh session
 
 ---
 

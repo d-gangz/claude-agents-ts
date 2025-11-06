@@ -20,6 +20,7 @@ interface ChatRequestBody {
     role: "user" | "assistant";
     content: string;
   }>;
+  sessionId?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -56,10 +57,16 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // Build options with optional session resume
+          const options = {
+            ...agentOptions,
+            ...(body.sessionId && { resume: body.sessionId }),
+          };
+
           // Stream Claude Agent responses
           for await (const message of query({
             prompt: generateMessages(),
-            options: agentOptions,
+            options,
           })) {
             // Stream different message types back to client
             const chunk = JSON.stringify(message) + "\n";

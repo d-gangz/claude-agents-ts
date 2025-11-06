@@ -36,6 +36,7 @@ export function ChatInterface() {
   const [showDebug, setShowDebug] = useState(false);
   const [debugMessages, setDebugMessages] = useState<DebugMessage[]>([]);
   const [sentMessages, setSentMessages] = useState<string>("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const debugScrollRef = useRef<HTMLDivElement>(null);
 
@@ -69,9 +70,10 @@ export function ChatInterface() {
 
     try {
       // Send only the latest user message to API
-      // The SDK maintains session history automatically via session_id
+      // Include sessionId if we have one (for session continuity)
       const requestBody = {
-        messages: [{ role: "user" as const, content: userMessage }]
+        messages: [{ role: "user" as const, content: userMessage }],
+        ...(sessionId && { sessionId }),
       };
       setSentMessages(JSON.stringify(requestBody, null, 2));
 
@@ -109,6 +111,11 @@ export function ChatInterface() {
 
             // Add to debug view
             setDebugMessages(prev => [...prev, { timestamp: new Date().toISOString(), data: message }]);
+
+            // Extract session ID from first system message
+            if (message.type === "system" && message.subtype === "init" && !sessionId) {
+              setSessionId(message.session_id);
+            }
 
             // Handle different message types from SDK
             if (message.type === "assistant") {
