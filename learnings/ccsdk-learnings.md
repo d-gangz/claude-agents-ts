@@ -754,4 +754,154 @@ export async function POST(req: NextRequest) {
 
 ---
 
+## Session Continuity in API Routes vs CLI
+
+### Problem
+
+When building a web-based chat interface that calls the API route with each new user message, the agent doesn't remember previous conversation context. Each request appears to start a fresh session.
+
+**Example:**
+```
+User: "My name is Gang"
+Agent: "Nice to meet you, Gang!"
+
+User: "What is my name?"
+Agent: "I don't have access to information about your name..."
+```
+
+### Root Cause
+
+There's a critical difference in how sessions work between CLI and API route implementations:
+
+**CLI Script (agent.ts) - Single Query Call:**
+```typescript
+// ONE query() call for the ENTIRE conversation
+for await (const message of query({
+  prompt: generateMessages(),  // Generator keeps yielding messages
+  options: agentOptions,
+})) {
+  // All messages share the same session automatically
+}
+```
+
+The async generator keeps yielding new user messages within a single `query()` call. The SDK creates one session and `session_id: ""` maintains that session throughout.
+
+**API Route (route.ts) - Multiple Query Calls:**
+```typescript
+// Each HTTP POST request creates a NEW query() call
+export async function POST(req: NextRequest) {
+  for await (const message of query({  // ❌ New session every time!
+    prompt: generateMessages(),
+    options: agentOptions,
+  })) { ... }
+}
+```
+
+Each HTTP request triggers a new `query()` call, which by default creates a **brand new session**, losing all previous context.
+
+### Solution
+
+Use the `continue: true` option to resume the most recent session:
+
+```typescript
+// app/api/chat/config.ts
+export const agentOptions: Options = {
+  maxTurns: 50,
+  cwd: "/path/to/workspace",
+  model: "haiku",
+  allowedTools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
+  systemPrompt: SYSTEM_PROMPT,
+  settingSources: ["local"],
+  env: process.env,
+
+  // ✅ Continue the most recent conversation
+  continue: true,
+};
+```
+
+**How it works:**
+1. First request: SDK creates new session (e.g., "ABC123")
+2. Second request: `continue: true` tells SDK to look up "ABC123" and resume
+3. Third request: SDK continues from previous state with full history
+
+### Why This Pattern Differs
+
+| Aspect | CLI Script | API Route |
+|--------|-----------|-----------|
+| **Query calls** | Single `query()` for entire conversation | New `query()` per HTTP request |
+| **Session creation** | One session, maintained automatically | New session per request (without `continue`) |
+| **Generator lifetime** | Lives for entire conversation | Created/destroyed per request |
+| **Context preservation** | Automatic via `session_id: ""` | Requires `continue: true` |
+
+### Key Takeaway
+
+**Streaming input mode** (CLI) vs **HTTP request-response** (API routes) require different session management approaches:
+
+- **CLI**: Single `query()` call + async generator = automatic session continuity
+- **API**: Multiple `query()` calls + `continue: true` = manual session continuity
+
+Without `continue: true`, your API route creates a stateless agent that forgets everything between requests.
+
+### Validation
+
+After adding `continue: true`, test conversation memory:
+
+```bash
+# First message
+curl -X POST http://localhost:3000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"My name is Gang"}]}'
+
+# Second message (should remember the name)
+curl -X POST http://localhost:3000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"What is my name?"}]}'
+```
+
+The agent should now respond with your name, proving session continuity works.
+
+### Related Configuration
+
+For reference, here's the complete working configuration:
+
+```typescript
+// app/api/chat/config.ts
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
+
+const SYSTEM_PROMPT = `You are a helpful AI assistant.`;
+
+export const agentOptions: Options = {
+  maxTurns: 50,
+  cwd: "/Users/gang/git-projects/claude-agents-ts/app/api/chat/workspace",
+  permissionMode: "default",
+  model: "haiku",
+  allowedTools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
+  systemPrompt: SYSTEM_PROMPT,
+  settingSources: ["local"],
+  env: process.env,        // Required for Next.js API routes
+  continue: true,          // Required for session continuity across HTTP requests
+};
+```
+
+### Frontend Implications
+
+With `continue: true` enabled:
+- Frontend only sends the **latest user message** (not full history)
+- SDK automatically loads and continues the conversation context
+- Each request builds on previous conversation state
+- Session persists until explicitly cleared or expired
+
+**Frontend example:**
+```typescript
+// Only send the new message
+const response = await fetch("/api/chat", {
+  method: "POST",
+  body: JSON.stringify({
+    messages: [{ role: "user", content: userInput }]  // Just the latest
+  })
+});
+```
+
+---
+
 *Last Updated: 2025-11-06*

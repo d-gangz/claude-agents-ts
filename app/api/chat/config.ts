@@ -43,6 +43,9 @@ export const agentOptions: Options = {
   // Pass environment explicitly for Next.js API routes (fixes spawn ENOENT)
   env: process.env,
 
+  // Continue the most recent conversation (maintains session across HTTP requests)
+  continue: true,
+
   // Optional: Disable specific tools
   // disallowedTools: [],
 
