@@ -14,9 +14,17 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk";
  * Shared query options for Claude Agent
  * Reference: https://docs.anthropic.com/claude/docs/agent-sdk/reference
  */
+const today = new Date().toISOString().split("T")[0]; // Formats as 'YYYY-MM-DD'
 const SYSTEM_PROMPT = `You are a helpful AI assistant. You can help with general questions and tasks.
-    
-    <Important>Always create new files in the working directory. Do not create in 'tmp' directory.</Important>`;
+
+Here is useful information about the environment you are running in:
+<env>
+Working directory: /Users/gang/git-projects/claude-agents-ts/app/api/chat/workspace
+Is directory a git repo: No
+Platform: linux
+OS Version: Linux 5.15.0-144-generic
+Today's date: ${today}
+</env>`;
 
 export const agentOptions: Options = {
   // Maximum conversation turns before stopping
@@ -36,6 +44,7 @@ export const agentOptions: Options = {
 
   // Custom system prompt appended to Claude Code's default
   systemPrompt: SYSTEM_PROMPT,
+  // systemPrompt: { type: "preset", preset: "claude_code" },
 
   // Load filesystem settings from project
   settingSources: ["local"],
