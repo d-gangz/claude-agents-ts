@@ -2,15 +2,16 @@
  * Streaming Claude Agent API route handler that processes chat messages using streaming input mode.
  *
  * Input data sources: POST request with JSON body containing messages
- * Output destinations: Streaming response to client
+ * Output destinations: Streaming response to client, /sessions/*.jsonl (session logs)
  * Dependencies: @anthropic-ai/claude-agent-sdk, ANTHROPIC_API_KEY environment variable
  * Key exports: POST handler for /api/chat endpoint
- * Side effects: Makes API calls to Claude, executes agent tools
+ * Side effects: Makes API calls to Claude, executes agent tools, creates session log files
  */
 
 import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { NextRequest } from "next/server";
 import { agentOptions } from "./config";
+import { createSessionLogger } from "@/lib/session-logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,12 +39,18 @@ export async function POST(req: NextRequest) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        // Initialize session logger
+        const logger = createSessionLogger();
+
         try {
           // Async generator for streaming input mode
           async function* generateMessages(): AsyncGenerator<SDKUserMessage, void, unknown> {
             // Yield all user messages from the request
             for (const msg of body.messages) {
               if (msg.role === "user") {
+                // Log user input BEFORE yielding
+                logger.logUserInput(msg.content);
+
                 yield {
                   type: "user" as const,
                   session_id: "", // Will be set by SDK
@@ -68,6 +75,9 @@ export async function POST(req: NextRequest) {
             prompt: generateMessages(),
             options,
           })) {
+            // Log every message
+            logger.log(message);
+
             // Stream different message types back to client
             const chunk = JSON.stringify(message) + "\n";
             controller.enqueue(encoder.encode(chunk));
@@ -78,8 +88,13 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // Close logger
+          logger.close();
           controller.close();
         } catch (error) {
+          // Always close logger on error
+          logger.close();
+
           const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
           controller.enqueue(
             encoder.encode(
