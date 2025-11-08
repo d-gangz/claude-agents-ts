@@ -288,39 +288,47 @@ interface ExchangeStats {
 }
 ```
 
-**Key Class Methods:**
+**Factory Function API:**
 
 ```typescript
-class SessionLogger {
-  /**
-   * Initialize logger.
-   *
-   * @param options - Configuration options
-   */
-  constructor(options?: SessionLoggerOptions);
+/**
+ * Create a session logger instance.
+ *
+ * @param options - Configuration options
+ * @returns Logger object with methods to log SDK messages
+ */
+function createSessionLogger(options?: SessionLoggerOptions) {
+  // Private state (closures)
+  let sessionId = '';
+  let filePath = '';
+  let exchangeCount = 0;
+  let currentMessages: Message[] = [];
+  // ... other private state
 
-  /**
-   * Log any message from the SDK. Automatically handles exchange boundaries.
-   *
-   * This is the main method you call from agent code!
-   *
-   * @param message - Any message type from claude-agent-sdk
-   */
-  log(message: any): void;
+  return {
+    /**
+     * Log any message from the SDK. Automatically handles exchange boundaries.
+     *
+     * This is the main method you call from agent code!
+     *
+     * @param message - Any message type from claude-agent-sdk
+     */
+    log(message: any): void;
 
-  /**
-   * Manually log user input to start a new exchange.
-   *
-   * Call this right before sending the message to the SDK.
-   *
-   * @param userText - The user's input text
-   */
-  logUserInput(userText: string): void;
+    /**
+     * Manually log user input to start a new exchange.
+     *
+     * Call this right before sending the message to the SDK.
+     *
+     * @param userText - The user's input text
+     */
+    logUserInput(userText: string): void;
 
-  /**
-   * Call when session ends to write session_end line.
-   */
-  close(): void;
+    /**
+     * Call when session ends to write session_end line.
+     */
+    close(): void;
+  };
 }
 ```
 
@@ -377,11 +385,11 @@ const filename = `${timestamp}_${sessionIdShort}.jsonl`;
 **Simple Integration Pattern:**
 
 ```typescript
-import { SessionLogger } from "@/lib/session-logger";
+import { createSessionLogger } from "@/lib/session-logger";
 
 async function main() {
   // Initialize logger (only once at start)
-  const logger = new SessionLogger();
+  const logger = createSessionLogger();
 
   try {
     // Start the streaming agent
@@ -454,7 +462,7 @@ async function* generateMessages(): AsyncGenerator<SDKUserMessage, void, unknown
 **Integration Pattern:**
 
 ```typescript
-import { SessionLogger } from "@/lib/session-logger";
+import { createSessionLogger } from "@/lib/session-logger";
 
 export async function POST(req: NextRequest) {
   try {
@@ -465,7 +473,7 @@ export async function POST(req: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         // Initialize logger
-        const logger = new SessionLogger();
+        const logger = createSessionLogger();
 
         try {
           // Async generator for messages
@@ -679,41 +687,11 @@ interface ResultMessage {
 
 ---
 
-## 5. Cost Calculation
-
-Based on Claude pricing (adjust rates as needed):
-
-```typescript
-function calculateCost(usage: any): number {
-  const inputTokens = usage.input_tokens || 0;
-  const outputTokens = usage.output_tokens || 0;
-  const cacheCreation = usage.cache_creation_input_tokens || 0;
-  const cacheRead = usage.cache_read_input_tokens || 0;
-
-  // Example rates (USD per 1M tokens)
-  const RATE_INPUT = 3.00 / 1_000_000;      // $3 per 1M
-  const RATE_OUTPUT = 15.00 / 1_000_000;    // $15 per 1M
-  const RATE_CACHE_WRITE = 3.75 / 1_000_000; // 25% markup
-  const RATE_CACHE_READ = 0.30 / 1_000_000;  // 10% of input
-
-  return (
-    inputTokens * RATE_INPUT +
-    outputTokens * RATE_OUTPUT +
-    cacheCreation * RATE_CACHE_WRITE +
-    cacheRead * RATE_CACHE_READ
-  );
-}
-```
-
-Note: The TypeScript SDK already provides `total_cost_usd` in the `result` message, so we can use that directly instead of calculating manually.
-
----
-
-## 6. Usage Examples
+## 5. Usage Examples
 
 ### Starting a Session (Automatic)
 
-When a user starts chatting, `SessionLogger` automatically:
+When a user starts chatting, the logger automatically:
 1. Detects session start from first `type: "system"` message
 2. Creates file: `sessions/20251107_084532_1f320356.jsonl`
 3. Writes `session_start` line
@@ -752,9 +730,9 @@ logger.close(); // Writes session_end line
 
 ---
 
-## 7. Implementation Checklist
+## 6. Implementation Checklist
 
-- [ ] Create `/lib/session-logger.ts` with `SessionLogger` class
+- [ ] Create `/lib/session-logger.ts` with `createSessionLogger` factory function
 - [ ] Implement message type handlers (system, assistant, user, result)
 - [ ] Implement exchange buffering and JSONL writing
 - [ ] Implement session-level aggregation with correct strategy:
@@ -773,7 +751,7 @@ logger.close(); // Writes session_end line
 
 ---
 
-## 8. Unresolved Questions
+## 7. Unresolved Questions
 
 1. **Cost calculation rates**: Use SDK-provided `total_cost_usd` (simpler, more accurate) ✓
 2. **Braintrust variant**: Should `app/api/chat/agent-braintrust.ts` use the same logger or separate handling?
@@ -781,7 +759,7 @@ logger.close(); // Writes session_end line
 4. **Error handling**: How should we handle file I/O errors during logging? Silent fail, console.error, or throw?
 5. **Timestamp format**: Stick with ISO 8601 (`2025-11-07T08:45:32Z`) ✓
 
-## 9. Key Design Decisions (Confirmed)
+## 8. Key Design Decisions (Confirmed)
 
 ### Exchange vs Turn Terminology
 - **Exchange**: User-facing interaction unit (user input → AI completes task → result)
@@ -807,10 +785,12 @@ The Claude Agent SDK is stateful and maintains conversation history. Later excha
 
 ---
 
-## 10. Next Steps
+## 9. Next Steps
 
 1. Review plan and answer remaining unresolved questions
-2. Implement `/lib/session-logger.ts` with:
+2. Implement `/lib/session-logger.ts` with factory function pattern:
+   - Use `createSessionLogger()` factory function (not class)
+   - Private state via closures
    - Exchange-based buffering (not turn-based)
    - Correct session aggregation (sum durations/costs, last exchange's tokens only)
    - `Message` interface for buffered content
