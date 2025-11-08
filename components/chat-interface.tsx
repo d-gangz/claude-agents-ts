@@ -43,14 +43,22 @@ export function ChatInterface() {
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // Find the viewport inside the ScrollArea
+      const viewport = scrollRef.current.querySelector('[data-slot="scroll-area-viewport"]');
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
     }
   }, [messages, streamingContent]);
 
   // Auto-scroll debug view
   useEffect(() => {
     if (debugScrollRef.current) {
-      debugScrollRef.current.scrollTop = debugScrollRef.current.scrollHeight;
+      // Find the viewport inside the ScrollArea
+      const viewport = debugScrollRef.current.querySelector('[data-slot="scroll-area-viewport"]');
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
     }
   }, [debugMessages]);
 
@@ -173,10 +181,10 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex gap-4 w-full max-w-7xl mx-auto">
-      <Card className="flex flex-col h-[600px] flex-1">
+    <div className="flex gap-4 w-full max-w-7xl mx-auto h-full">
+      <Card className="flex flex-col h-full flex-1 overflow-hidden">
         {/* Header */}
-        <div className="border-b p-4 flex items-center justify-between">
+        <div className="border-b p-4 flex items-center justify-between shrink-0">
           <div>
             <h2 className="text-xl font-semibold">Claude Agent Chat</h2>
             <p className="text-sm text-gray-500">Powered by Claude Agent SDK</p>
@@ -192,9 +200,10 @@ export function ChatInterface() {
         </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+      <ScrollArea className="flex-1 overflow-hidden" ref={scrollRef}>
+        <div className="p-4">
         {messages.length === 0 && (
-          <div className="flex items-center justify-center h-full text-gray-400">
+          <div className="flex items-center justify-center min-h-[200px] text-gray-400">
             <p>Send a message to start chatting with the Claude Agent</p>
           </div>
         )}
@@ -224,10 +233,11 @@ export function ChatInterface() {
             isStreaming={true}
           />
         )}
+        </div>
       </ScrollArea>
 
       {/* Input */}
-      <div className="border-t p-4">
+      <div className="border-t p-4 shrink-0">
         <form onSubmit={handleSubmit} className="flex gap-2">
           <Input
             value={input}
@@ -245,12 +255,13 @@ export function ChatInterface() {
 
       {/* Debug Panel */}
       {showDebug && (
-        <Card className="flex flex-col h-[600px] w-[500px]">
-          <div className="border-b p-4">
+        <Card className="flex flex-col h-full w-[500px] overflow-hidden">
+          <div className="border-b p-4 shrink-0">
             <h3 className="font-semibold">Debug View</h3>
             <p className="text-xs text-gray-500">Request & Response Stream</p>
           </div>
-          <ScrollArea className="flex-1 p-4" ref={debugScrollRef}>
+          <ScrollArea className="flex-1 overflow-hidden" ref={debugScrollRef}>
+            <div className="p-4">
             {/* Sent Messages */}
             {sentMessages && (
               <div className="mb-4">
@@ -281,6 +292,7 @@ export function ChatInterface() {
                 ))}
               </div>
             )}
+            </div>
           </ScrollArea>
         </Card>
       )}
