@@ -22,8 +22,6 @@ Next.js application integrating the [Claude Agent SDK](https://docs.anthropic.co
 1. Clone and install dependencies:
 ```bash
 npm install
-# or
-bun install  # For package management only
 ```
 
 2. Create `.env.local` with your API keys:
@@ -71,21 +69,22 @@ Agent behavior is configured in `app/api/chat/config.ts`:
 - **systemPrompt**: Custom instructions for agent behavior
 - **cwd**: Working directory for file operations
 
-## Important: Runtime Compatibility
+## Important: Use Node.js and npm
 
-⚠️ **Use Node.js, not Bun** for running the application:
+⚠️ **This project uses Node.js and npm exclusively:**
 
 ```bash
-# ✅ Correct
+# Package management
+npm install
 npm run dev
-npx tsx app/api/chat/agent.ts
+npm run build
 
-# ❌ Incorrect (will fail with SDK errors)
-bun run dev
-bun run app/api/chat/agent.ts
+# CLI agents
+npx tsx app/api/chat/agent.ts
+npx tsx app/api/chat/agent-braintrust.ts
 ```
 
-The Claude Agent SDK requires Node.js-specific APIs. Bun can be used for package management (`bun install`, `bun add`) but not for execution.
+**Why not Bun?** The Claude Agent SDK requires Node.js-specific APIs that Bun doesn't fully support. See `learnings/ccsdk-learnings.md` for technical details.
 
 ## Project Structure
 
