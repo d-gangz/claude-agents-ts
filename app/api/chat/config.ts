@@ -9,17 +9,22 @@
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 
 /**
  * Shared query options for Claude Agent
  * Reference: https://docs.anthropic.com/claude/docs/agent-sdk/reference
  */
 const today = new Date().toISOString().split("T")[0]; // Formats as 'YYYY-MM-DD'
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const WORKING_DIRECTORY = join(__dirname, "workspace");
 const SYSTEM_PROMPT = `You are a helpful AI assistant. You can help with general questions and tasks.
 
 Here is useful information about the environment you are running in:
 <env>
-Working directory: /Users/gang/git-projects/claude-agents-ts/app/api/chat/workspace
+Working directory: ${WORKING_DIRECTORY}
 Is directory a git repo: No
 Platform: linux
 OS Version: Linux 5.15.0-144-generic
@@ -31,7 +36,7 @@ export const agentOptions: Options = {
   maxTurns: 50,
 
   // Working directory for agent operations
-  cwd: "/Users/gang/git-projects/claude-agents-ts/app/api/chat/workspace",
+  cwd: WORKING_DIRECTORY,
 
   // Permission mode - bypass for non-interactive usage
   permissionMode: "default",
